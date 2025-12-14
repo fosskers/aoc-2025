@@ -1,0 +1,216 @@
+(defpackage parcom
+  (:use :cl)
+  (:shadow #:char #:string #:integer #:float #:count #:rest #:space #:not)
+  ;; --- Types --- ;;
+  (:export #:parse #:in
+           #:failure? #:fail
+           #:ok #:ok?
+           #:empty?
+           #:digit? #:hex? #:octal? #:binary?
+           #:ascii-letter? #:space?
+           #:always #:maybe #:-> #:fn)
+  ;; --- Functional Programming --- ;;
+  (:export #:fmap #:pmap #:const
+           #:all #:right #:left #:instead
+           #:*> #:<* #:ap #:<*> #:<$ #:alt)
+  ;; --- Parsers --- ;;
+  (:export #:any #:any-but #:any-if #:hex #:unicode #:control-char #:eof
+           #:char #:string #:string-lenient
+           #:unsigned #:integer #:float
+           #:newline #:space #:space1 #:multispace #:multispace1
+           #:take #:take-while #:take-while1 #:rest
+           #:sliding-take #:sliding-take1
+           #:pure)
+  ;; --- Combinators --- ;;
+  (:export #:opt #:between #:pair #:maybe #:not
+           #:many #:many1 #:sep #:sep1 #:sep-end #:sep-end1 #:take-until
+           #:consume #:consume1 #:consume-sep #:consume-sep1
+           #:skip #:peek #:sneak #:count #:recognize)
+  ;; --- Conditions --- ;;
+  (:export #:parse-failure)
+  (:documentation "A simple parser combinator library."))
+
+(in-package :parcom)
+
+;; --- Types --- ;;
+
+(defmacro fn (name type)
+  "A shorthand for declaiming function types."
+  `(declaim (ftype ,type ,name)))
+
+(deftype -> (a b &rest args)
+  "A shorthand for function types."
+  (if (null args)
+      `(function (,a) ,b)
+      (let ((argz (butlast args))
+            (res (car (last args))))
+        `(function (,a ,b ,@argz) ,res))))
+
+(deftype always (res)
+  "A parser that is always successful."
+  `(function (fixnum) (values ,res fixnum)))
+
+(deftype maybe (res)
+  "A parser that might fail."
+  `(function (fixnum) (values (or ,res (member :fail)) fixnum)))
+
+(deftype char-string ()
+  '(simple-array character (*)))
+
+;; --- Top-level pointer to the input --- ;;
+
+(declaim (type char-string *input*))
+(defparameter *input* ""
+  "A global pointer to the current input string.")
+(declaim (type fixnum *input-length*))
+(defparameter *input-length* 0
+  "The length of the current global input.")
+
+;; --- Conditions --- ;;
+
+(define-condition parse-failure (error)
+  ((offset  :initarg :offset  :reader parse-failure-offset)
+   (context :initarg :context :reader parse-failure-context))
+  (:documentation "Some parsing failed, so we render why.")
+  (:report (lambda (c stream)
+             (format stream "Parsing failed at location ~a. Context:~%↓~%~a"
+                     (parse-failure-offset c)
+                     (parse-failure-context c)))))
+
+;; --- Short-hands --- ;;
+
+(fn in (-> char-string fixnum))
+(defun in (input)
+  "Set the global input and yield the initial parser offset."
+  (setf *input* input)
+  (setf *input-length* (length *input*))
+  0)
+
+#+nil
+(in "hello")
+
+(fn off (-> fixnum fixnum fixnum))
+(defun off (offset curr)
+  "Advance the input by some offset."
+  (declare (optimize (speed 3)))
+  (+ offset curr))
+
+#+nil
+(off 4 10)
+
+(defmacro ok (offset value)
+  "Parsing was successful."
+  `(values ,value ,offset))
+
+(defmacro ok? (x)
+  "Did parsing succeed?"
+  `(cl:not (failure? ,x)))
+
+(defmacro fail (offset)
+  "Fail a parse while recording while recording how far it got."
+  `(values :fail ,offset))
+
+#+nil
+(fail 1)
+
+(defmacro failure? (x)
+  "Did parsing fail?"
+  `(eq :fail ,x))
+
+(fn parse (-> (maybe t) char-string t))
+(defun parse (parser input)
+  "Run a parser and attempt to extract its final value."
+  (multiple-value-bind (res next) (funcall parser (in input))
+    (if (ok? res)
+        res
+        (let ((diff (- *input-length* next)))
+          (error 'parse-failure
+                 :offset next
+                 :context (if (< diff 32)
+                              (make-array diff
+                                          :element-type 'character
+                                          :displaced-to *input*
+                                          :displaced-index-offset next)
+                              (format nil "~a ... (truncated)"
+                                      (make-array 32
+                                                  :element-type 'character
+                                                  :displaced-to *input*
+                                                  :displaced-index-offset next))))))))
+
+#+nil
+(parse (*> (char #\a) (char #\b)) "acb")
+
+;; --- Utilities --- ;;
+
+(fn empty? (-> cl:string boolean))
+(defun empty? (string)
+  "Is a given string empty?"
+  (zerop (length string)))
+
+#++
+(empty? "")
+
+(fn ascii-letter? (-> character boolean))
+(defun ascii-letter? (char)
+  "A-Za-z"
+  (or (char<= #\a char #\z)
+      (char<= #\A char #\Z)))
+
+#+nil
+(ascii-letter? #\h)
+#+nil
+(ascii-letter? #\1)
+
+(fn digit? (-> character boolean))
+(defun digit? (char)
+  "Is a given character a number from 0 to 9?"
+  (char<= #\0 char #\9))
+
+#+nil
+(digit? #\7)
+
+(fn hex? (-> character boolean))
+(defun hex? (char)
+  "Is a given character a hex digit?"
+  (or (digit? char)
+      (char<= #\a char #\f)
+      (char<= #\A char #\F)))
+
+#+nil
+(hex? #\7)
+#+nil
+(hex? #\J)
+
+(fn octal? (-> character boolean))
+(defun octal? (char)
+  "Is a given character an octal digit?"
+  (char<= #\0 char #\7))
+
+(fn binary? (-> character boolean))
+(defun binary? (char)
+  "Is a given character a binary digit?"
+  (char<= #\0 char #\1))
+
+(fn space? (-> character boolean))
+(defun space? (char)
+  "Is a given character some sort of whitespace?"
+  (or (eql char #\space)
+      (eql char #\newline)
+      (eql char #\tab)
+      (eql char #\return)))
+
+(fn direct-copy (-> char-string fixnum fixnum char-string))
+(defun direct-copy (s from to)
+  "Direct, low-level string copying."
+  (declare (optimize (speed 3) (safety 0)))
+  (let* ((len  (- to from))
+         (work (make-array len :element-type 'character)))
+    #+abcl
+    (progn (loop :for i fixnum :from 0 :below len
+                 :do (setf (schar work i) (schar s (+ i from))))
+           work)
+    #-abcl
+    (replace work s :start2 from :end2 to)))
+
+#+nil
+(direct-copy "hello there" 1 3)
