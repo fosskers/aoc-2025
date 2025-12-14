@@ -43,3 +43,8 @@
       (loop :for c := (read-char stream nil :eof)
             :until (eq c :eof)
             :do (write-char c out)))))
+
+(fn string->simple (-> string (simple-array character (*))))
+(defun string->simple (s)
+  (coerce s '(simple-array character (*))))
+
