@@ -41,12 +41,13 @@
   (->> v
        (t:transduce #'t:enumerate
                     (t:fold (lambda (acc pair)
-                              (cond ((< (cdr pair) (cdr acc)) pair)
+                              (cond ((< (cdr acc) (cdr pair)) (t:reduced acc))
+                                    ((< (cdr pair) (cdr acc)) pair)
                                     (t acc)))))
        (car)))
 
 #+nil
-(index-of-lowest #(4 2 3))
+(index-of-lowest #(7 4 3 2 6 1))
 
 (defun remove-at (v n)
   "Remove a vector element at index N. Allocates a fresh vector."
@@ -88,3 +89,4 @@
 (greatest-of-digits 2 #p"03-input.txt")
 #+nil
 (greatest-of-digits 12 #p"03-input.txt")
+
